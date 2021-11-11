@@ -1,0 +1,14 @@
+[package]
+name = "hecate"
+version = "0.1.0"
+authors = ["Erin Moon <erin@hecke.rs>"]
+edition = "2018"
+
+[dependencies]
+irc = "0.15"
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+color-eyre = "0.5"
+reqwest = { version = "0.11", features = ["stream"] }
+tracing = "0.1"
+tracing-subscriber = "0.2"
