@@ -3,8 +3,17 @@ use std::collections::{HashMap, VecDeque};
 use futures_util::StreamExt;
 use irc::client::prelude::*;
 use color_eyre::eyre::{eyre, Result};
+use serde_json::{Value, json};
 use tokio::task;
-use tracing::{info, trace};
+use tracing::{info, debug, trace};
+use lazy_static::lazy_static;
+use regex::Regex;
+
+lazy_static! {
+    static ref RE_CURRENT_STATS: Regex = Regex::new(r"Hecate:?\s+(nl|nowlistening|listeners)").unwrap();
+}
+
+const STATS_URI: &'static str = "http://sleepy.zone:8000/status-json.xsl";
 
 enum State {
     SkipAudio(usize),
@@ -34,6 +43,36 @@ fn decode_meta(meta: &String) -> HashMap<String, String> {
             (k.to_owned(), v.to_owned())
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct Stats {
+    current: u64,
+    peak: u64,
+}
+
+async fn get_stats() -> Result<Stats> {
+    let cl = reqwest::Client::new();
+
+    let res = cl.get(STATS_URI).send().await?;
+    let dat: Value = res.json().await?;
+
+    dat.get("icestats").and_then(|icestats| {
+        debug!(?icestats, "got icestats");
+        match icestats.get("source") {
+            Some(a @ Value::Array(_)) => a.get(0),
+            Some(o @ Value::Object(_)) => Some(o),
+            _ => None,
+        }
+    })
+    .and_then(|station| {
+        debug!(?station, "extracted station");
+        Some(Stats {
+            current: station.get("listeners").and_then(|x| x.as_u64())?,
+            peak: station.get("listener_peak").and_then(|x| x.as_u64())?,
+        })
+    })
+    .ok_or_else(|| eyre!("couldnt parse stats from json"))
 }
 
 async fn proc_notifier(sender: Sender) -> Result<()> {
@@ -108,9 +147,15 @@ async fn main() -> Result<()> {
     while let Some(message) = stream.next().await.transpose()? {
         match message.command {
             Command::PRIVMSG(ref tgt, ref msg) => {
-                if msg.contains(client.current_nickname()) {
-                    sender.send_privmsg(tgt, "hi!")?;
+                println!("{:?}", msg);
+                if RE_CURRENT_STATS.is_match(msg) {
+                    let stats = get_stats().await?;
+                    sender.send_privmsg(tgt, format!("⇶ current: {} ¦ peak: {}", stats.current, stats.peak))?;
                 }
+
+                // if msg.contains(client.current_nickname()) {
+                //     sender.send_privmsg(tgt, "hi!")?;
+                // }
             },
             _ => (),
         }
